@@ -1,4 +1,4 @@
-%% A: Extract and process raw data
+%% Extract and process raw data
 clear all; close all;
 p = loadProjectDataset('GCaMP_LearningGrating2AFC');
 numSess = height(p.sessionInfo);
@@ -7,45 +7,47 @@ numSess = height(p.sessionInfo);
 regions = {'Left VTA','Right VTA','Left DMS','Right DMS','Left NAc','Right NAc'};
 
 %Get data from each mouse
-t_sample_epoch = linspace(-0.5,0.8,200);
+t_sample_epoch = linspace(-0.5,0.8,100);
 t_sample_wholetrial = linspace(-0.2,4,400);
 warp_sizes = [50,100,20,100]; %number of elements for each epoch: pre-stim, stim-choice, choice-outcome, post-outcome
 D = table;
 for sess = 1:numSess
-    fprintf('%s\n',p.sessionInfo.expRef{sess});
+    fprintf('%d/%d %s\n',sess,numSess,p.sessionInfo.expRef{sess});
     
     %Load behav data
     b = getBehavData(p.sessionInfo.expRef{sess},p.sessionInfo.dataProfile{sess});
     
-    %Load photometry data
-    e=strsplit(p.sessionInfo.expRef{sess},'_');
-    thisDate = e{1};
-    thisSess = e{2};
-    thisSubj = e{3};
-    filepath = sprintf("\\\\QNAP-AL001.dpag.ox.ac.uk\\Data\\%s\\%s\\photoM\\%s_%s_%s_F.mat",thisSubj,thisDate,thisSubj,thisDate,thisSess);
-    load(filepath);
-    Water = photoMdata.TTL_1; % water TTL signal
-    TimeStamps=photoMdata.Time_s_;
-    
-    % Align dF/F times to block times
-    [~,reward_echo_photoM] = risetime(Water,TimeStamps);
-    switch(p.sessionInfo.dataProfile{sess})
-        case 'Grating2AFC_choiceWorld'
-            reward_echo_behav = b.rewardTime(~isnan(b.rewardTime));
-            stimTime = b.stimulusOnsetTime;
-            outcomeTime = nanmean([b.rewardTime, b.punishSoundOnsetTime],2);
-        case 'Grating2AFC_choiceWorld_noTimeline'
-            reward_echo_behav = b.rewardTimeEstimate(~isnan(b.rewardTimeEstimate));
-            stimTime = b.stimulusOnsetTimeEstimate;
-            outcomeTime = nanmean([b.rewardTimeEstimate, b.punishSoundOnsetTimeEstimate],2);
-    end
-    
-    [~,photoM2block] = makeCorrection(reward_echo_behav, reward_echo_photoM, false); % find the correction factor
-    deltaFoverF= photoMdata.AnalogIn_2_dF_F0;
-    traceTime = applyCorrection(TimeStamps, photoM2block);  % photoM data is on the Timeline now
-    
-    b.stimTime = stimTime;
-    b.outcomeTime = outcomeTime;
+    %Get photometry data
+    [F,t]=photometryAlign(p.sessionInfo.expRef{sess}, b.rewardTime(~isnan(b.rewardTime)));
+%     
+%     %Load photometry data
+%     e=strsplit(p.sessionInfo.expRef{sess},'_');
+%     thisDate = e{1};
+%     thisSess = e{2};
+%     thisSubj = e{3};
+%     filepath = sprintf("\\\\QNAP-AL001.dpag.ox.ac.uk\\Data\\%s\\%s\\photoM\\%s_%s_%s_F.mat",thisSubj,thisDate,thisSubj,thisDate,thisSess);
+%     load(filepath);
+%     Water = photoMdata.TTL_1; % water TTL signal
+%     TimeStamps=photoMdata.Time_s_;
+%     
+%     % Align dF/F times to block times
+%     [~,reward_echo_photoM] = risetime(Water,TimeStamps);
+%     switch(p.sessionInfo.dataProfile{sess})
+%         case 'Grating2AFC_choiceWorld'
+%             reward_echo_behav = b.rewardTime(~isnan(b.rewardTime));
+%             stimTime = b.stimulusOnsetTime;
+%         case 'Grating2AFC_choiceWorld_noTimeline'
+%             reward_echo_behav = b.rewardTimeEstimate(~isnan(b.rewardTimeEstimate));
+%             stimTime = b.stimulusOnsetTimeEstimate;
+%             outcomeTime = nanmean([b.rewardTimeEstimate, b.punishSoundOnsetTimeEstimate],2);
+%     end
+%     
+%     [~,photoM2block] = makeCorrection(reward_echo_behav, reward_echo_photoM, false); % find the correction factor
+%     deltaFoverF= photoMdata.AnalogIn_2_dF_F0;
+%     traceTime = applyCorrection(TimeStamps, photoM2block);  % photoM data is on the Timeline now
+%     
+%     b.stimTime = stimTime;
+    b.outcomeTime = nanmean([b.rewardTime, b.punishSoundOnsetTime],2);
     
     b.dff_stim = nan(length(b.choice),length(t_sample_epoch),length(regions));
     b.dff_choice = nan(length(b.choice),length(t_sample_epoch),length(regions));
@@ -58,29 +60,29 @@ for sess = 1:numSess
         
         %check whether this area is measured for any of the channels
         if strcmp(p.sessionInfo.photometryChannel2{sess}, regions{a})
-            dff = zscore(photoMdata.AnalogIn_2_dF_F0);
+            dff = zscore(F(:,1));
         elseif strcmp(p.sessionInfo.photometryChannel4{sess}, regions{a})
-        	dff = zscore(photoMdata.AnalogIn_4_dF_F0);
+        	dff = zscore(F(:,2));
         else
-            dff = nan(size(traceTime));
+            dff = nan(size(t));
         end
         
-        b.dff_stim(:,:,a) = interp1(traceTime,dff,b.stimTime + t_sample_epoch);
-        b.dff_choice(:,:,a) = interp1(traceTime,dff,b.choiceStartTime + t_sample_epoch);
-        b.dff_outcome(:,:,a) = interp1(traceTime,dff,b.outcomeTime + t_sample_epoch);
-        b.dff_wholetrial(:,:,a) = interp1(traceTime,dff, b.stimTime + t_sample_wholetrial );
+        b.dff_stim(:,:,a) = interp1(t,dff,b.stimulusOnsetTime + t_sample_epoch);
+        b.dff_choice(:,:,a) = interp1(t,dff,b.choiceStartTime + t_sample_epoch);
+        b.dff_outcome(:,:,a) = interp1(t,dff,b.outcomeTime + t_sample_epoch);
+        b.dff_wholetrial(:,:,a) = interp1(t,dff, b.stimulusOnsetTime + t_sample_wholetrial );
 
         %get time-warped activity for each trial
         warp_samples = nan(length(b.choice), sum(warp_sizes));
         for tr = 1:length(b.choice)
-            epoch1 = linspace(b.stimTime(tr)-0.5, b.stimTime(tr), warp_sizes(1));
-            epoch2 = linspace(b.stimTime(tr), b.choiceStartTime(tr), warp_sizes(2));
+            epoch1 = linspace(b.stimulusOnsetTime(tr)-0.5, b.stimulusOnsetTime(tr), warp_sizes(1));
+            epoch2 = linspace(b.stimulusOnsetTime(tr), b.choiceStartTime(tr), warp_sizes(2));
             epoch3 = linspace(b.choiceStartTime(tr), b.outcomeTime(tr), warp_sizes(3));
             epoch4 = linspace(b.outcomeTime(tr), b.outcomeTime(tr)+1, warp_sizes(4));
             warp_samples(tr,:) = [epoch1, epoch2, epoch3, epoch4];
         end
         
-        b.dff_timewarped(:,:,a) = interp1(traceTime,dff,warp_samples);
+        b.dff_timewarped(:,:,a) = interp1(t,dff,warp_samples);
     end
     
     %baseline subtract
@@ -92,12 +94,12 @@ for sess = 1:numSess
     b.dff_timewarped = b.dff_timewarped - mean(b.dff_timewarped(:,1:warp_sizes(1),:),2);
 %  
     %calculate RT
-    b.RT = b.choiceStartTime - stimTime;
+    b.RT = b.choiceStartTime - b.stimulusOnsetTime;
     b.expRef = repmat(p.sessionInfo.expRef(sess), length(b.choice), 1);
     
     %add wheel position data
     block = dat.loadBlock(p.sessionInfo.expRef{sess});
-    b.wheel_stim =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.stimTime + t_sample_epoch);
+    b.wheel_stim =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.stimulusOnsetTime + t_sample_epoch);
     b.wheel_choice =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.choiceStartTime + t_sample_epoch);
     pre_stim_baseline = mean(b.wheel_stim(:,t_sample_epoch<0),2);
     b.wheel_stim = b.wheel_stim - pre_stim_baseline; %pre-stim baseline
@@ -110,19 +112,20 @@ for sess = 1:numSess
     
     %add to big table
     D = vertcat(D, b(:,{'expRef','trialNumber','contrastLeft','contrastRight',...
-                        'choice','stimTime','choiceStartTime','outcomeTime',...
+                        'choice','stimulusOnsetTime','choiceStartTime','outcomeTime',...
                         'RT','feedback','rewardVolume',...
                         'dff_stim','dff_choice','dff_outcome','dff_timewarped','dff_wholetrial',...
                         'wheel_stim','wheel_choice'}) );
 end
 
 save('../data/compiled.mat','p','D','t_sample_epoch','t_sample_wholetrial','regions','warp_sizes','-v7.3');
-%% B: Load data and compute binned DA values
+%% **: Load data and compute binned DA values
 clear all; close all;
 load('../data/compiled.mat');
 numSess = height(p.sessionInfo);
 
 stimWindow = [0.4 0.6];
+% stimWindow = [0.3 0.4];
 outcomeWindow = [0.35 0.4];
 
 %Remove trials with very large RTs, so warping isn't so extreme.
@@ -143,29 +146,27 @@ D = innerjoin(D,p.sessionInfo);
 %re-sort by mouse, session and trial number
 D = sortrows(D,{'mouseName','sessionNum','trialNumber'});
 
-%Compute zscored RT within each session and outcome decoding
+%Compute zscored RT and psychometric weights
 D.RTz = nan(size(D.RT));
-% p.sessionInfo.rewardDecoder = nan(height(p.sessionInfo),length(t_sample_epoch),length(regions));
-% p.sessionInfo.choiceDecoder = nan(height(p.sessionInfo),length(t_sample_epoch),length(regions));
+p.sessionInfo.psych_B = nan(height(p.sessionInfo),1);
+p.sessionInfo.psych_SL = nan(height(p.sessionInfo),1);
+p.sessionInfo.psych_SR = nan(height(p.sessionInfo),1);
+
+%Per session quantities
 for sess = 1:numSess
     %zscore RT
     idx = strcmp(D.expRef,p.sessionInfo.expRef{sess});
     D.RTz(idx) = (D.RT(idx) - median(D.RT(idx)))/(1.486 * mad(D.RT(idx),1)); %modified z score
     
-%     for a = 1:length(regions)
-%         activity = D.dff_choice(idx,:,a);
-%         if all(~isnan(activity(:)))
-%             
-%             p.sessionInfo.choiceDecoder(sess,:,a) = binaryDecoder(activity, D.choice(idx)=='Right choice', {D.cDiff(idx)},'numShuffles',0);
-%         end
-%         
-%         activity = D.dff_outcome(idx,:,a);
-%         if all(~isnan(activity(:)))
-%             p.sessionInfo.rewardDecoder(sess,:,a) = binaryDecoder(activity, D.feedback(idx)=='Rewarded', {D.cDiff(idx)},'numShuffles',0);
-%         end
-%     end
+    %Compute psychometric weights for each session
+    b = glmfit([D.contrastLeft(idx) D.contrastRight(idx)],D.choice(idx)=='Right choice', 'binomial','Constant','on');
+    p.sessionInfo.psych_B(sess) = b(1);
+    p.sessionInfo.psych_SL(sess) = b(2);
+    p.sessionInfo.psych_SR(sess) = b(3);
 end
 
+%get the VTA activity (makes things easier later)
+D.VTA_binned = nanmean( D.dff_stim_binned(:,:,contains(regions,'VTA')), 3);
 %% Plot psychometric curves per session
 g = gramm('x',D.cDiff,'y',double(D.choice=='Right choice'),'lightness',D.mouseName);
 g.facet_grid(D.mouseName,D.sessionNum);
@@ -287,7 +288,7 @@ for a = 1:length(regions)
         set(g.facet_axes_handles(:,c),'ylim',ylim);
     end
     
-    g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence_timewarped/','file_type','pdf');
+%     g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence_timewarped/','file_type','pdf');
     
 end
 %% Plot DA traces and tuning curves
@@ -329,7 +330,7 @@ for a = 1:length(regions)
     set(g(1,1).facet_axes_handles(1:end-1,:),'xtick','','xcolor','none');
     set(g(1,2).facet_axes_handles(:,2:end),'ytick','','ycolor','none');
     set(g(1,2).facet_axes_handles(1:end-1,:),'xtick','','xcolor','none');
-    g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence/','file_type','pdf');
+%     g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence/','file_type','pdf');
     
     %tuning curves
     clear g;
@@ -356,7 +357,7 @@ for a = 1:length(regions)
     set(g(1,1).facet_axes_handles(1:end-1,:),'xtick','','xcolor','none');
     set(g(1,2).facet_axes_handles(:,2:end),'ytick','','ycolor','none');
     set(g(1,2).facet_axes_handles(1:end-1,:),'xtick','','xcolor','none');
-    g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/tuning_curves','file_type','pdf');
+%     g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/tuning_curves','file_type','pdf');
 
 end
 %% Plot DA, Psych and zRT plots for each mouse
@@ -659,45 +660,112 @@ g(3,1).set_names('x','Block','y','Median RT');
 
 
 figure; g.draw();
-%% Plot DA responses for faster and slower RT sides
+%% Correlate DA and RT asymmetries 
 
-%For each session, assign one side to the faster side
-[G,GR,GC] = groupsummary(D.RTz,{D.expRef, D.choice, D.feedback},'median');
-L = G(GR{2}=='Left choice' & GR{3}=='Rewarded');
-R = G(GR{2}=='Right choice' & GR{3}=='Rewarded');
+%For each session, compute the slope of VTA vs C, and RT vs C and compare
+%those across sessions
+p.sessionInfo.RTvC = NaN(height(p.sessionInfo),2);
+p.sessionInfo.VTAvC = NaN(height(p.sessionInfo),2);
+for sess = 1:height(p.sessionInfo)
+    E = D( strcmp(D.expRef, p.sessionInfo.expRef{sess}), :);
 
-pref = table;
-pref.expRef = GR{1}(GR{2}=='Left choice' & GR{3}=='Rewarded');
-pref.fasterRT = categorical(R<L,[0 1],{'Left faster','Right faster'});
-D = innerjoin(D,pref);
+    idxL = E.cDiff<=0;
+    idxR = E.cDiff>=0;
+    
+    if length(unique(E.cDiff(idxR)))>1 & ~all(isnan(E.VTA_binned))
+        %Calculate slope of VTA DA vs Contrast
+        bL = glmfit(abs(E.cDiff(idxL)),E.VTA_binned(idxL),'normal','constant','on');
+        bR = glmfit(abs(E.cDiff(idxR)),E.VTA_binned(idxR),'normal','constant','on');
+        p.sessionInfo.VTAvC(sess,:) = [bL(2) bR(2)];
+        
+%         yfit = glmval(bL, abs(E.cDiff(idxL)), 'identity');
+%         plot( abs(E.cDiff(idxL)), E.VTA_binned(idxL), 'ko', abs(E.cDiff(idxL)), yfit, 'r-');
+        
+        %Calculate slope of RT vs Contrast
+        bL = glmfit(abs(E.cDiff(idxL)),E.RT(idxL),'normal','constant','on');
+        bR = glmfit(abs(E.cDiff(idxR)),E.RT(idxR),'normal','constant','on');
+        p.sessionInfo.RTvC(sess,:) = [bL(2) bR(2)];
+        
+%         g = gramm('x',E.cDiff,'y',E.choice=='Right choice');
+%         g.stat_summary('geom','point');
+%         figure; g.draw();
+%         yfit = glmval([p.sessionInfo.psych_B(sess) p.sessionInfo.psych_SL(sess) p.sessionInfo.psych_SR(sess)]', [E.contrastLeft E.contrastRight], 'logit');
+%         plot(g.facet_axes_handles, E.cDiff, yfit, 'ko');
+% %         
+        
+    end
+end
 
-%Define if stimulus side matches the preferred side
-D.stimSidePref = categorical((D.cDiff>0 & D.fasterRT=='Right faster') | (D.cDiff<0 & D.fasterRT=='Left faster'),[0 1],{'Non-Preferred (Slower RT)','Preferred (faster RT)'});
 
-%Show RT separated by assignment
 clear g;
-g = gramm('x',abs(D.cDiff),'y',D.RTz,'color',D.stimSidePref,'subset',D.cDiff~=0);
-g.facet_grid(D.mouseName,D.sessionNum,'scale','free_y');
-g.stat_summary('geom',{'point','line','errorbar'},'type','quartile','setylim',true);
-g.set_names('x','|Contrast|','y','RT','column','','row','','color','');
-g.set_title('RT separation');
-g.set_layout_options('redraw',true,'redraw_gap',0.01);
-figure('units','normalized','outerposition',[0 0 1 1],'color','w');
+g(1,1) = gramm('x',-p.sessionInfo.psych_SL,'y',p.sessionInfo.VTAvC(:,1),'color',p.sessionInfo.mouseName);
+g(1,1).geom_point();
+g(1,1).set_names('x','SL parameter','y','VTA slope on CL');
+g(1,2) = gramm('x',p.sessionInfo.psych_SR,'y',p.sessionInfo.VTAvC(:,2),'color',p.sessionInfo.mouseName);
+g(1,2).geom_point();
+g(1,2).set_names('x','SR parameter','y','VTA slope on CR');
+g(1,3) = gramm('x',-p.sessionInfo.psych_SL - p.sessionInfo.psych_SR,'y',p.sessionInfo.VTAvC(:,1)-p.sessionInfo.VTAvC(:,2),'color',p.sessionInfo.mouseName);
+g(1,3).geom_point();
+g(1,3).set_names('x','SL-SR parameter','y','VTA_L - VTA_R');
+g(1,4) = gramm('x',p.sessionInfo.psych_B,'y',p.sessionInfo.VTAvC(:,1)-p.sessionInfo.VTAvC(:,2),'color',p.sessionInfo.mouseName);
+g(1,4).geom_point();
+g(1,4).set_names('x','Bias parameter','y','VTA_L - VTA_R');
+figure; g.draw();
+g(1,1).update('color',[]);
+g(1,1).stat_glm('disp_fit',true);
+g(1,2).update('color',[]);
+g(1,2).stat_glm('disp_fit',true);
+g(1,3).update('color',[]);
+g(1,3).stat_glm('disp_fit',true);
+g(1,4).update('color',[]);
+g(1,4).stat_glm('disp_fit',true);
 g.draw();
 
-%Plot the DA responses 
+
 clear g;
-g = gramm('x',abs(D.cDiff),'y',D.DAstim_binned,'color',D.stimSidePref,'subset',D.cDiff~=0);
-g.facet_grid(D.mouseName,D.sessionNum,'scale','free_y');
-g.stat_summary('geom',{'point','line','errorbar'},'setylim','true');
-g.set_names('x','|Contrast|','y',sprintf('%0.2f-%0.2f @ stim',stimWindow(1),stimWindow(2)),'column','','row','','color','');
-g.set_title('DA stimulus responses separated for sides according to RT');
+g(1,1) = gramm('x', -p.sessionInfo.RTvC(:,1),...
+          'y', p.sessionInfo.VTAvC(:,1),...
+          'color', p.sessionInfo.mouseName);
+g(1,2) = gramm('x', -p.sessionInfo.RTvC(:,2),...
+          'y', p.sessionInfo.VTAvC(:,2),...
+          'color', p.sessionInfo.mouseName);
+g(1,3) = gramm('x', p.sessionInfo.RTvC(:,1)-p.sessionInfo.RTvC(:,2),...
+          'y', p.sessionInfo.VTAvC(:,2)-p.sessionInfo.VTAvC(:,1),...
+          'color', p.sessionInfo.mouseName);
+g(1,1).geom_point();
+g(1,2).geom_point();
+g(1,3).geom_point();
+g(1,1).set_names('x','RT_L vs C_L slope','y','VTA_L vs C_L slope');
+g(1,2).set_names('x','RT_R vs C_R slope','y','VTA_R vs C_R slope');
+g(1,3).set_names('x','RT L - R slopes','y','VTA R - L slopes');
+g.geom_vline('xintercept',0,'style','k:');
+g.geom_hline('yintercept',0,'style','k:');
 g.set_layout_options('redraw',true,'redraw_gap',0.01);
-figure('units','normalized','outerposition',[0 0 1 1],'color','w');
+figure; g.draw();
+g(1,1).update('color',[]);
+g(1,1).stat_glm('disp_fit',true);
+g(1,2).update('color',[]);
+g(1,2).stat_glm('disp_fit',true);
+g(1,3).update('color',[]);
+g(1,3).stat_glm('disp_fit',true);
 g.draw();
+
+
+clear g;
+g(1,1) = gramm('x',abs(D.cDiff),'y',D.VTA_binned,'color', D.cDiff>0, 'subset', D.cDiff~=0);
+g(1,1).stat_summary();
+g(1,1).set_names('x','abs(C)','y','VTA');
+g(1,1).facet_grid(D.mouseName,D.sessionNum);
+
+g(1,2) = gramm('x',abs(D.cDiff),'y',D.RT,'color', D.cDiff>0, 'subset', D.cDiff~=0);
+g(1,2).stat_summary();
+g(1,2).set_names('x','abs(C)','y','RT');
+g(1,2).facet_grid(D.mouseName,D.sessionNum);
+
+figure; g.draw();
 
 %For each session compute the L-R difference in DA and RT for easy contrast
-%correct trials only 
+%correct trials only
 [mice,~,miceID] = unique(D.mouseName);
 M = {};
 RT = [];
@@ -705,31 +773,40 @@ DA = [];
 PERF = {};
 for m = 1:max(miceID)
     E =  D(strcmp(D.mouseName,mice{m}) & abs(D.cDiff)>=0.5,:);
-
-    DAR=groupsummary(E.DAstim_binned(E.cDiff>0),E.sessionNum(E.cDiff>0),'median');
-    DAL=groupsummary(E.DAstim_binned(E.cDiff<0),E.sessionNum(E.cDiff<0),'median');
-    DA = [DA; DAR-DAL];
+    E.RT( E.RT < stimWindow(2) ) = NaN;
+    E.sessionStage = discretize(E.sessionNum,3);
     
-    RTR=groupsummary(E.RTz(E.cDiff>0),E.sessionNum(E.cDiff>0),'median');
-    RTL=groupsummary(E.RTz(E.cDiff<0),E.sessionNum(E.cDiff<0),'median');
-    RT = [RT; RTL-RTR];
-    
-    M = [M; repmat(mice(m),length(DAR),1)];
-    
-    pCorrect = groupsummary(E.feedback=='Rewarded',E.sessionNum,'mean');
-    PERF = [PERF; categorical(pCorrect>=median(pCorrect),[0 1],{'Low performance','High performance'})];
+    if ~all(isnan(E.VTA_binned))
+        DAR=groupsummary(E.VTA_binned(E.cDiff>0),E.sessionNum(E.cDiff>0),'median');
+        DAL=groupsummary(E.VTA_binned(E.cDiff<0),E.sessionNum(E.cDiff<0),'median');
+%         da = (DAR - DAL);
+        da = (DAR - DAL)./(mean([DAR, DAL],2) + 0.05);
+        DA = [DA; da];
+        
+        RTR=groupsummary(E.RT(E.cDiff>0),E.sessionNum(E.cDiff>0),'median');
+        RTL=groupsummary(E.RT(E.cDiff<0),E.sessionNum(E.cDiff<0),'median');
+        RT = [RT; RTL-RTR];
+        
+        M = [M; repmat(mice(m),length(DAR),1)];
+    end
+%     pCorrect = groupsummary(E.feedback=='Rewarded',E.sessionNum,'mean');
+%     PERF = [PERF; categorical(pCorrect>=median(pCorrect),[0 1],{'Low performance','High performance'})];
 end
 
 
-g = gramm('x',RT,'y',DA,'color',PERF);
-g.facet_grid([],M');
+g = gramm('x',RT,'y',DA,'color',M);
+% g.facet_grid([],M');
 g.set_layout_options('redraw',true,'redraw_gap',0.01);
-g.stat_glm('disp_fit',true);
+% g.stat_glm('disp_fit',true);c
+% g.stat_ellipse('type','95percentile');
 g.geom_point();
 g.geom_vline('xintercept',0,'style','k:');
 g.geom_hline('yintercept',0,'style','k:');
 g.set_names('x','\Delta RT (Right choice faster)','y','\Delta DA (Right stim larger)');
 figure; g.draw();
+g.update('color',[]);
+g.stat_glm('disp_fit',true);
+g.draw();
 
 %% Plot timewarped DA traces in DMS, focusing on sessions with and without behavioural history effects
 % 
@@ -792,184 +869,135 @@ for a = 3:4
     figure('units','normalized','outerposition',[0.0042 0.0074 0.5380 0.9139],'color','w');
     g.draw();
 end
+%% Fit and plot kernels to stimulus/choice/reward
 
-%% KERNEL STUFF:
-%% Try Engelhard et al kernel model
-%The model works as a multiple linear regression. The regressors in the
-%model are a set of kernel weights based on a set of splines. 
-% E = D(D.RT<3.5,:);
-
-E = D(D.RT<3.5 & strcmp(D.mouseName,'ALK084'),:);
-
-%First step is to create the design matrix of this regression. this
-%involves defining a set of behavioural varibles and their timings, and
-%combining this with the spline set.
-%Stimulus events
-E.LeftStimEvent = (E.RT > t_sample_wholetrial) & E.contrastLeft>0;
-E.RightStimEvent = (E.RT > t_sample_wholetrial) & E.contrastRight>0;
-E.outcomeEvent = (E.outcomeTime-E.stimTime) < t_sample_wholetrial & t_sample_wholetrial < ((E.outcomeTime-E.stimTime)+0.5);
-E.rewardEvent = E.outcomeEvent & E.feedback=='Rewarded';
-% E.punishEvent = E.outcomeEvent & E.feedback=='Unrewarded';
-
-%variables
-%events: left stimulus, right stimulus  %%%%, left choice, right choice, reward, punish
-base_variables = { mat2cell(E.LeftStimEvent, ones(height(E),1),30);
-                   mat2cell(E.RightStimEvent, ones(height(E),1),30);
-                   mat2cell(E.rewardEvent, ones(height(E),1),30)  };                          
-var_types = {'event','event','event'};
-groupings = {1,2,3};
-[pred_allmat,pred_inds_cell,grouped_var_types] = make_predictor_matrix_generalcase(base_variables,var_types,groupings);
-
-%Next step is to fit this model to the neural activity
-neural_act_mat = mat2cell(E.dff_wholetrial(:,:,strcmp(regions,'Left VTA')), ones(height(E),1), 30);
-neural_act_mat = cellfun(@(x) x', neural_act_mat, 'UniformOutput', false);
-
-Y = cat(1,neural_act_mat{:});
-X = cat(1,pred_allmat{:});
-X = [ones(size(X,1),1), X];
-b = regress(Y,X);
-offset = b(1);
-b = b(2:end);
-
-load('spline_basis30_int.mat'); 
-
-figure;
-subplot(1,4,1);
-plot(t_sample_wholetrial, offset + spline_basis*b(1:7) ); title('Left stim kernel');
-subplot(1,4,2);
-plot(t_sample_wholetrial, offset + spline_basis*b(8:14) ); title('Right stim kernel');
-subplot(1,4,3);
-plot(t_sample_wholetrial, offset + spline_basis*b(15:21) ); title('Reward kernel');
-linkaxes(get(gcf,'children'),'xy');
+p = loadProjectDataset('GCaMP_LearningGrating2AFC');
 
 
-g = gramm('x',t_sample_wholetrial,'y',E.dff_wholetrial(:,:,strcmp(regions,'Left VTA')),'color',E.cDiff,'lightness',E.feedback);
-g.stat_summary('setylim',true);
-figure; g.draw();
-%% Functional data analysis
-
-%Load and align fluorescence data
-expRef = '2018-04-05_1_ALK074';
-%Load behav data
-b = getBehavData(expRef, 'Grating2AFC_choiceWorld');
-
-%Load photometry data
-e=strsplit(expRef,'_');
-thisDate = e{1};
-thisSess = e{2};
-thisSubj = e{3};
-filepath = sprintf("\\\\QNAP-AL001.dpag.ox.ac.uk\\Data\\%s\\%s\\photoM\\%s_%s_%s_F.mat",thisSubj,thisDate,thisSubj,thisDate,thisSess);
-load(filepath);
-Water = photoMdata.TTL_1; % water TTL signal
-TimeStamps=photoMdata.Time_s_;
-
-% Align dF/F times to block times
-[~,reward_echo_photoM] = risetime(Water,TimeStamps);
-reward_echo_behav = b.rewardTime(~isnan(b.rewardTime));
-stimTime = b.stimulusOnsetTime;
-outcomeTime = nanmean([b.rewardTime, b.punishSoundOnsetTime],2);
-[~,photoM2block] = makeCorrection(reward_echo_behav, reward_echo_photoM, false); % find the correction factor
-dff = zscore(photoMdata.AnalogIn_2_dF_F0);
-traceTime = applyCorrection(TimeStamps, photoM2block);  % photoM data is on the Timeline now
-b.stimTime = stimTime;
-b.outcomeTime = outcomeTime;
-
-%Remove all trials with RT > 3, and then get all fluorescence aligned to
-%stimulus onset to +4 sec
-b = b( (b.choiceStartTime - b.stimulusOnsetTime) < 3,:);
-t_sample = linspace(-0.2,4,500);
-b.dff_stim = interp1(traceTime,dff,b.stimulusOnsetTime + t_sample);
-b.dff_stim = b.dff_stim - mean(b.dff_stim(:,t_sample<0),2);
-
+%Remove trials with RT>3
+D = D(D.RT<3 & D.RT>0,:);
 
 % Create spline basis set
-numSplines = 7;
-splineBasis = create_bspline_basis([-0.2 4],numSplines);
-splineBasisMat = full(eval_basis( t_sample ,splineBasis));
+numSplines = 9;
+% splineBasis = create_bspline_basis([-0.2 4],numSplines);
+% splineBasisMat = full(eval_basis( t_sample_wholetrial ,splineBasis));
+splineBasis = create_bspline_basis([0 2],numSplines);
+splineBasisMat = full(eval_basis( 0:mean(diff(t_sample_wholetrial)):2 ,splineBasis));
+numSplineTimepoints = size(splineBasisMat,1);
 
 %Create boxcar windows for LeftStimulus events and convolve with splines
-b.stimLeftEvent = zeros(size(b.dff_stim));
-b.stimRightEvent = zeros(size(b.dff_stim));
-b.choiceLeftEvent = zeros(size(b.dff_stim));
-b.choiceRightEvent = zeros(size(b.dff_stim));
+D.stimLeftEvent = zeros(height(D), length(t_sample_wholetrial));
+D.stimRightEvent = zeros(height(D), length(t_sample_wholetrial));
+D.choiceLeftEvent = zeros(height(D), length(t_sample_wholetrial));
+D.choiceRightEvent = zeros(height(D), length(t_sample_wholetrial));
+D.rewardEvent = zeros(height(D), length(t_sample_wholetrial));
 
+D.stimLeftConvSpline = nan( height(D) , length(t_sample_wholetrial), numSplines );
+D.stimRightConvSpline = nan( height(D) , length(t_sample_wholetrial), numSplines );
+D.choiceLeftConvSpline = nan( height(D) , length(t_sample_wholetrial), numSplines );
+D.choiceRightConvSpline = nan( height(D) , length(t_sample_wholetrial), numSplines );
+D.rewardConvSpline = nan( height(D) , length(t_sample_wholetrial), numSplines );
 
-c = struct; %convolved splines
-c.stimLeft = nan( height(b) , length(t_sample), numSplines );
-c.stimRight = nan( height(b) , length(t_sample), numSplines );
-c.choiceLeft = nan( height(b) , length(t_sample), numSplines );
-c.choiceRight = nan( height(b) , length(t_sample), numSplines );
-for tr = 1:height(b)
-    if b.contrastLeft(tr)>0
-        
-        idx = find( t_sample > 0, 1, 'first');
-%         idx = 0 < t_sample & t_sample < (b.choiceStartTime(tr) - b.stimulusOnsetTime(tr));
-        b.stimLeftEvent(tr,idx) = 1;
-    end
+idx = find( t_sample_wholetrial > 0,1,'first'); %stimulus time
+D.stimLeftEvent(D.contrastLeft>0,idx)=1;
+D.stimRightEvent(D.contrastRight>0,idx)=1;
+[~,idx]=max(t_sample_wholetrial > D.RT,[],2); %choice time
+D.choiceLeftEvent(sub2ind( size(D.choiceLeftEvent),find(D.choice=='Left choice'),idx(D.choice=='Left choice')))=1;
+D.choiceRightEvent(sub2ind( size(D.choiceRightEvent),find(D.choice=='Right choice'),idx(D.choice=='Right choice')))=1;
+[~,idx]=max(t_sample_wholetrial > (D.outcomeTime - D.stimulusOnsetTime),[],2); %reward time
+D.rewardEvent(sub2ind( size(D.rewardEvent),find(D.feedback=='Rewarded'),idx(D.feedback=='Rewarded')))=1;
+
+%now convolve with splines
+for sp = 1:numSplines
+    w = conv2(D.stimLeftEvent,splineBasisMat(:,sp)');
+    D.stimLeftConvSpline(:, :, sp) = w(:,1:length(t_sample_wholetrial));
     
-    if b.contrastRight(tr)>0
-%         idx = 0 < t_sample & t_sample < (b.choiceStartTime(tr) - b.stimulusOnsetTime(tr));
-        idx = find( t_sample > 0, 1, 'first');
-        b.stimRightEvent(tr,idx) = 1;
-    end
+    w = conv2(D.stimRightEvent,splineBasisMat(:,sp)');
+    D.stimRightConvSpline(:, :, sp) = w(:,1:length(t_sample_wholetrial));
     
-    if b.choice(tr)=='Left choice'
-        idx = find( t_sample > (b.choiceStartTime(tr)-b.stimulusOnsetTime(tr)), 1, 'first');
-        b.choiceLeftEvent(tr,idx) = 1;
-    end
-    if b.choice(tr)=='Right choice'
-        idx = find( t_sample > (b.choiceStartTime(tr)-b.stimulusOnsetTime(tr)), 1, 'first');
-        b.choiceRightEvent(tr,idx) = 1;
-    end    
+    w = conv2(D.choiceLeftEvent,splineBasisMat(:,sp)');
+    D.choiceLeftConvSpline(:, :, sp) = w(:,1:length(t_sample_wholetrial));
+    
+    w = conv2(D.choiceRightEvent,splineBasisMat(:,sp)');
+    D.choiceRightConvSpline(:, :, sp) = w(:,1:length(t_sample_wholetrial));
+    
+    w = conv2(D.rewardEvent,splineBasisMat(:,sp)');
+    D.rewardConvSpline(:, :, sp) = w(:,1:length(t_sample_wholetrial));
+end
 
-    for sp = 1:numSplines
-        w = conv(b.stimLeftEvent(tr,:), splineBasisMat(:,sp));
-        c.stimLeft(tr, :, sp) = w(1:length(t_sample));
+kernels = table;
+
+kernelLabel = {'contrastLeft Kernel','contrastRight Kernel','choice left Kernel','choice right Kernel','Reward Kernel'};
+%for each region
+for a = 1:length(regions)
         
-        w = conv(b.stimRightEvent(tr,:), splineBasisMat(:,sp));
-        c.stimRight(tr, :, sp) = w(1:length(t_sample));
-        
-        w = conv(b.choiceLeftEvent(tr,:), splineBasisMat(:,sp));
-        c.choiceLeft(tr, :, sp) = w(1:length(t_sample));
-        
-        w = conv(b.choiceRightEvent(tr,:), splineBasisMat(:,sp));
-        c.choiceRight(tr, :, sp) = w(1:length(t_sample));
+    %Get activity in one region
+    Y = D.dff_wholetrial(:,:,a);
+    
+    %Separate for each session
+    sess = unique(D.expRef(~isnan(Y(:,1))));
+    for s = 1:length(sess)
+        idx = strcmp(D.expRef,sess{s});
+        Ysess = Y(idx,:);
+        SL = reshape(D.stimLeftConvSpline(idx,:,:), numel(Ysess), numSplines);
+        SR = reshape(D.stimRightConvSpline(idx,:,:), numel(Ysess), numSplines);
+        ChL = reshape(D.choiceLeftConvSpline(idx,:,:), numel(Ysess), numSplines);
+        ChR = reshape(D.choiceRightConvSpline(idx,:,:), numel(Ysess), numSplines);
+        R = reshape(D.rewardConvSpline(idx,:,:), numel(Ysess), numSplines);
+        X = [SL, SR, ChL, ChR, R];
+        coeff = glmfit(X,Ysess(:),'normal','constant','off');
+
+        for evts = 1:length(kernelLabel)
+            K = splineBasisMat*coeff( (1:numSplines) + (evts-1)*numSplines );
+            
+            row = table;
+            row.mouseName = unique(D.mouseName(idx));
+            row.sessionNumber = unique(D.sessionNum(idx));
+            row.kernelType = kernelLabel(evts);
+            row.kernelValue = K';
+            row.region = regions(a);
+            kernels = [kernels; row];
+        end
+    
     end
 end
 
-c = structfun(@(f) reshape(f, numel(b.dff_stim),numSplines), c, 'UniformOutput', false);
-
-Y = reshape( b.dff_stim, numel(b.dff_stim), 1);
-% Y = zscore(Y);
-X = [c.stimLeft, c.stimRight, c.choiceLeft, c.choiceRight];
-X = zscore(X);
-% coeff = regress(Y, X);
-
-coeff = glmfit(X,Y,'normal','constant','on');
-coeff = coeff(2:end); %ignore offset
-
-figure;
-for evts = 1:4
-    subplot(2,2,evts); 
-    
-    idx = (1:numSplines) + (evts-1)*numSplines;
-    
-    plot(t_sample, splineBasisMat*coeff(idx));
-end
-linkaxes(get(gcf,'children'),'xy');
-
-
-g = gramm('x',t_sample,'y',b.dff_stim,'color',b.contrastRight-b.contrastLeft);
-% g.facet_grid([], b.feedback);
-g.stat_summary('setylim','true'); 
+g = gramm('x', 0:mean(diff(t_sample_wholetrial)):2, 'y', kernels.kernelValue);
+g.facet_grid(kernels.region, kernels.kernelType,'scale','free_y');
+g.geom_hline('yintercept',0,'style','k:');
+g.geom_line();
+g.set_names('x','Time from event (sec)','y','Kernel value','row','','column','');
 figure; g.draw();
+g.update();
+g.set_color_options('chroma',0,'lightness',30);
+g.stat_summary('setylim',true);
+g.draw();
 
-g = gramm('x',t_sample,'y',b.dff_stim,'color',b.feedback);
-% g.facet_grid([], b.feedback);
-g.stat_summary('setylim','true'); 
-figure; g.draw();
 
 %% Create plots for presentation
+
+%Plot simulations with different levels of sensitivity
+figure;
+CL = [linspace(1,0,50)'; zeros(50,1)];
+CR = [zeros(50,1); linspace(0,1,50)'];
+
+subplot(1,3,1);
+yfit = glmval([0 -10 3]', [CL CR], 'logit');
+plot(CR-CL,yfit);
+xline(0); yline(0.5);
+
+subplot(1,3,2);
+yfit = glmval([0 -3 3]', [CL CR], 'logit');
+plot(CR-CL,yfit);
+xline(0); yline(0.5);
+
+subplot(1,3,3);
+yfit = glmval([0 -3 10]', [CL CR], 'logit');
+plot(CR-CL,yfit);
+xline(0); yline(0.5);
+
+
+
 
 %Last several sessions of ALK074: psych and RT plots
 E=D(strcmp(D.mouseName,'ALK074') & D.sessionNum>15,:);
@@ -1001,14 +1029,15 @@ g.draw();
 % Plot progress of trainng across all mice (performance over days);
 clear g;
 %Perf (high C) over days
-g(1,1) = gramm('x',D.sessionNum,'y',D.feedback=='Rewarded','lightness',D.mouseName,'subset',abs(D.cDiff)>=0.5);
+g(1,1) = gramm('x',D.sessionNum,'y',D.feedback=='Rewarded','group',D.mouseName,'subset',abs(D.cDiff)>=0.5);
 g(1,1).stat_summary('geom',{'line','point'});
 g(1,1).geom_hline('yintercept',0.5,'style','k:');
 g(1,1).set_names('x','Days','y','Performance on easy contrasts','column','','row','');
 g(1,1).axe_property('ylim',[0 1]);
 
 %RT over days
-g(2,1) = gramm('x',D.sessionNum,'y',D.RT,'lightness',D.mouseName,'subset',abs(D.cDiff)>=0.5 & D.feedback=='Rewarded');
+g(2,1) = gramm('x',D.sessionNum,'y',D.RT,'group',D.mouseName,'subset',abs(D.cDiff)>=0.5 & D.feedback=='Rewarded');
+% g(2,1) = gramm('x',D.sessionNum,'y',D.RT,'lightness',D.mouseName);
 g(2,1).stat_summary('geom',{'line','point'},'type','quartile');
 g(2,1).set_names('x','Days','y','median RT','column','','row','');
 
@@ -1019,7 +1048,7 @@ idxL = D.cDiff<=0.5;
 [perfR,perflabel] = groupsummary(D.feedback(idxR)=='Rewarded',{D.sessionNum(idxR) D.mouseName(idxR)},'mean');
 [perfL] = groupsummary(D.feedback(idxL)=='Rewarded',{D.sessionNum(idxL) D.mouseName(idxL)},'mean');
 perf = abs(perfL - perfR);
-g(1,2) = gramm('x',perflabel{1},'y',perf,'lightness',perflabel{2});
+g(1,2) = gramm('x',perflabel{1},'y',perf,'group',perflabel{2});
 g(1,2).stat_summary('geom',{'line','point'});
 g(1,2).set_names('x','Days','y','|Acc_L - Acc_R|');
 g(1,2).geom_hline('yintercept',0,'style','k:');
@@ -1027,33 +1056,129 @@ g(1,2).geom_hline('yintercept',0,'style','k:');
 %L-R RT
 idxR = D.cDiff>=0.5 & D.feedback=='Rewarded';
 idxL = D.cDiff<=0.5 & D.feedback=='Rewarded';
-[rtR,rtlabel] = groupsummary(D.RT(idxR),{D.sessionNum(idxR) D.mouseName(idxR)},'median');
-[rtL] = groupsummary(D.RT(idxL),{D.sessionNum(idxL) D.mouseName(idxL)},'median');
+[rtR,rtlabel] = groupsummary(D.RT(idxR),{D.sessionNum(idxR) D.mouseName(idxR)},'median','IncludeEmptyGroups',true);
+[rtL] = groupsummary(D.RT(idxL),{D.sessionNum(idxL) D.mouseName(idxL)},'median','IncludeEmptyGroups',true);
 rt = abs(rtL - rtR);
-g(2,2) = gramm('x',rtlabel{1},'y',rt,'lightness',rtlabel{2});
+g(2,2) = gramm('x',rtlabel{1},'y',rt,'group',rtlabel{2});
 g(2,2).stat_summary('geom',{'line','point'});
 g(2,2).set_names('x','Days','y','|RT_L - RT_R|');
 g(2,2).geom_hline('yintercept',0,'style','k:');
-
+% g.axe_property('xlim',[0 12]);
 figure; g.draw();
 
+%add in average over mice
+idx = abs(D.cDiff)>=0.5;
+[perf1,perf1label] = groupsummary(D.feedback(idx)=='Rewarded',{D.sessionNum(idx) D.mouseName(idx)},'mean');
+plot( g(1,1).facet_axes_handles, groupsummary(perf1,perf1label{1},'median'), 'k-','linewidth',4);
+
+[rt1,rt1label] = groupsummary(D.RT(idx),{D.sessionNum(idx) D.mouseName(idx)},'median');
+plot( g(2,1).facet_axes_handles, groupsummary(rt1,rt1label{1},'median'), 'k-','linewidth',4);
+
+
+% plot( g(1,2).facet_axes_handles, groupsummary(perf,perflabel{1},'mean'), 'k-','linewidth',4);
+% plot( g(2,2).facet_axes_handles, groupsummary(rt,rtlabel{1},'mean'), 'k-','linewidth',4);
+plot( g(1,2).facet_axes_handles, groupsummary(perf,perflabel{1},'median'), 'k-','linewidth',4);
+plot( g(2,2).facet_axes_handles, groupsummary(rt,rtlabel{1},'median'), 'k-','linewidth',4);
+
+
+
+% Psych SL and SR
+g(1,1) = gramm('x',p.sessionInfo.sessionNum,'y',-p.sessionInfo.psych_SL,'lightness',p.sessionInfo.mouseName); 
+g(1,1).geom_line(); 
+g(1,1).geom_point();
+g(1,1).set_names('x','days','y','SL parameter');
+g(1,2) = gramm('x',p.sessionInfo.sessionNum,'y',p.sessionInfo.psych_SR,'lightness',p.sessionInfo.mouseName); 
+g(1,2).geom_line(); 
+g(1,2).geom_point();
+g(1,2).set_names('x','days','y','SR parameter');
+g(1,3) = gramm('x',p.sessionInfo.sessionNum,'y',-p.sessionInfo.psych_SL - p.sessionInfo.psych_SR,'lightness',p.sessionInfo.mouseName); 
+g(1,3).geom_line(); 
+g(1,3).geom_point(); 
+g(1,3).set_names('x','days','y','SL-SR parameter');
+g.set_layout_options('redraw',true,'redraw_gap',0.01); 
+g.axe_property('xlim',[0 12]);
+figure; g.draw()
 
 % Plot progress of DA_L - DA_R over days
 
 % Define contra and ipsi VTA responses
 E = D( contains(D.photometryChannel2,'VTA'),:);
 E.VTA_binned = nanmean( E.dff_stim_binned(:,:,contains(regions,'VTA')), 3);
-% E.cDiff_contraIpsi = E.cDiff; %positive = ipsi, negative = contra
-% E.cDiff_contraIpsi( strcmp(E.photometryChannel2,'Left VTA') ) = -E.cDiff_contraIpsi( strcmp(E.photometryChannel2,'Left VTA') ) ;
-
-
-
-
-strcmp(D.photometryChannel2,'Left VTA')
-
+E.cDiff_contraIpsi = E.cDiff; %positive = ipsi, negative = contra
+E.cDiff_contraIpsi( strcmp(E.photometryChannel2,'Left VTA') ) = -E.cDiff_contraIpsi( strcmp(E.photometryChannel2,'Left VTA') ) ;
 clear g;
-%Perf (high C) over days
-g(1,1) = gramm('x',D.sessionNum,'y',D.dff_stim_binned,'lightness',D.mouseName,'subset',abs(D.cDiff)>=0.5);
-g(1,1).stat_summary('geom',{'line','point'});
-g(1,1).geom_hline('yintercept',0.5,'style','k:');
-g(1,1).set_names('x','Days','y','DA post-stim','column','','row','');
+g(1,1) = gramm('x',E.sessionNum,'y',E.VTA_binned,'lightness',E.mouseName,'subset',abs(E.cDiff)>=0.5);
+g(1,1).stat_summary('geom',{'line','point','errorbar'});
+g(1,1).geom_hline('yintercept',0,'style','k:');
+g(1,1).set_names('x','Days','y','dF/F (z-score) post-stim','column','','row','');
+
+idxR = E.cDiff>=0.5 & E.feedback=='Rewarded';
+idxL = E.cDiff<=0.5 & E.feedback=='Rewarded';
+[daR,dalabel] = groupsummary(E.VTA_binned(idxR),{E.sessionNum(idxR) E.mouseName(idxR)},'mean');
+[daL] = groupsummary(E.VTA_binned(idxL),{E.sessionNum(idxL) E.mouseName(idxL)},'mean');
+da = (daL - daR)./(mean([daL daR],2)+0.05); %normalise by mean response each day
+da = abs(da);
+g(2,1) = gramm('x',dalabel{1},'y',da,'lightness',dalabel{2});
+g(2,1).stat_summary('geom',{'line','point'});
+g(2,1).set_names('x','Days','y','|DA_L - DA_R|');
+g(2,1).geom_hline('yintercept',0,'style','k:');
+g.axe_property('xlim',[0 12]);
+figure; g.draw();
+
+idx = abs(E.cDiff)>=0.5;
+[da1,da1label] = groupsummary(E.VTA_binned(idx),{E.sessionNum(idx) E.mouseName(idx)},'mean');
+plot( g(1,1).facet_axes_handles, 1:13, groupsummary(da1,da1label{1},'mean'), 'k-','linewidth',4);
+plot( g(2,1).facet_axes_handles, 1:13, groupsummary(da,dalabel{1},'mean'), 'k-','linewidth',4);
+
+
+% tuning curves
+clear g;
+g = gramm('x',E.cDiff,'y',E.VTA_binned,'subset',E.feedback=='Rewarded','lightness',E.mouseName);
+g.facet_grid(E.mouseName, E.sessionNum,'scale','free_y');
+g.stat_summary('geom',{'line','point','errorbar'},'setylim',true);
+g.set_names('x','Contrast','y','dF/F (z-score) post-stim','row','','column','');
+g.set_layout_options('redraw',true,'redraw_gap',0.01);
+figure; g.draw();
+
+
+% tuning curves with slope per side
+clear g;
+E = E(E.cDiff~=0,:);
+g = gramm('x',abs(E.cDiff),'y',E.VTA_binned,'subset',E.feedback=='Rewarded','color',sign(E.cDiff));
+g.facet_grid(E.mouseName, E.sessionNum,'scale','free_y');
+% g.stat_summary('geom',{'line','point','errorbar'},'setylim',true);
+g.stat_summary('geom',{'point','errorbar'},'setylim',true);
+g.stat_glm('disp_fit',false);
+g.set_names('x','ABS(Contrast)','y','dF/F (z-score) post-stim','row','','column','','color','Stimulus side');
+g.set_layout_options('redraw',true,'redraw_gap',0.01);
+figure; g.draw();
+
+%% Fit history model 
+
+d = struct;
+d.contrastLeft = D.contrastLeft;
+d.contrastRight = D.contrastRight;
+d.choice = double(D.choice=='Right choice');
+[mice,~,d.subjectID]=unique(D.mouseName);
+[~,~,d.sessionID] = unique([d.subjectID D.sessionNum],'rows');
+
+%currentWinEffect
+win = zeros(size(D.choice));
+win(D.feedback=='Rewarded' & D.choice=='Right choice') = +1;
+win(D.feedback=='Rewarded' & D.choice=='Left choice') = -1;
+
+%currentLoseEffect
+lose = zeros(size(D.choice));
+lose(D.feedback=='Unrewarded' & D.choice=='Right choice') = +1;
+lose(D.feedback=='Unrewarded' & D.choice=='Left choice') = -1;
+
+d.prevWin = circshift(win,1); % -1=L, +1=R previous trial rewarded
+d.prevLose = circshift(lose,1); % -1=L, +1=R previous trial rewarded
+
+%Remove first trials
+d = structfun(@(f) f( D.trialNumber>1, :) , d,  'UniformOutput', 0);
+
+%fit
+fit = stan_fitModel('Hierarchical_Logistic_OutcomeHistory',d,'\\QNAP-AL001.dpag.ox.ac.uk\PZatka-Haas\GCaMPLearning\data\fit_model.mat');
+% fit = load("\\QNAP-AL001.dpag.ox.ac.uk\PZatka-Haas\GCaMPLearning\data\fit_model.mat");
+
