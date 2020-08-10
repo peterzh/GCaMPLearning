@@ -218,23 +218,38 @@ g.draw();
 
 g.export('file_name','WheelVelocity','export_path','../figures/behavioural/','file_type','pdf');
 %% Plot psych curves conditioned on history
+
+%Conditioned on previous choice
 clear g;
-
-g(1,1) = gramm('x',D.cDiff,'y',double(D.choice=='Right choice'),'color',circshift(D.choice,1),'subset',circshift(D.feedback,1)=='Rewarded');
-g(1,1).facet_grid(D.mouseName,D.sessionNum);
-g(1,1).stat_summary('geom','point');
-g(1,1).axe_property('ylim',[0 1]);
-g(1,1).geom_vline('xintercept',0,'style','k:');
-g(1,1).geom_hline('yintercept',0.5,'style','k:');
-g(1,1).set_names('x','Contrast','y','p(Right)','column','','row','','color','');
-g(1,1).set_title('Psychometric curve conditioned on previously rewarded action');
-g(1,1).stat_glm('distribution','binomial','fullrange',true);
-
+g = gramm('x',D.cDiff,'y',double(D.choice=='Right choice'),'color',circshift(D.choice,1));
+g.facet_grid(D.mouseName,D.sessionNum);
+g.stat_summary('geom',{'point','line','errorbar'},'type',@grammCallbackBinomialConfidenceInterval);
+g.axe_property('ylim',[0 1]);
+g.geom_vline('xintercept',0,'style','k:');
+g.geom_hline('yintercept',0.5,'style','k:');
+g.set_names('x','Contrast','y','p(Right)','column','','row','','color','');
+g.set_title('Psychometric curve conditioned on previous choice');
+% g.stat_glm('distribution','binomial','fullrange',true);
 g.set_layout_options('redraw',true,'redraw_gap',0.005,'legend_width',0.09);
-
 figure('units','normalized','outerposition',[0 0 1 1],'color','w')
 g.draw();
-g.export('file_name','PsychometricCurvesConditionedHistory','export_path','../figures/behavioural/','file_type','pdf');
+g.export('file_name','PsychHist_PrevChoice','export_path','../figures/behavioural/','file_type','pdf');
+
+%Conditioned on previous feedback for Right choice
+clear g;
+g = gramm('x',D.cDiff,'y',double(D.choice=='Right choice'),'color',circshift(D.feedback,1),'subset',circshift(D.choice,1)=='Right choice');
+g.facet_grid(D.mouseName,D.sessionNum);
+g.stat_summary('geom',{'point','line','errorbar'},'type',@grammCallbackBinomialConfidenceInterval);
+g.axe_property('ylim',[0 1]);
+g.geom_vline('xintercept',0,'style','k:');
+g.geom_hline('yintercept',0.5,'style','k:');
+g.set_names('x','Contrast','y','p(Right)','column','','row','','color','');
+g.set_title('Psychometric curve conditioned on previous outcome for Right choice');
+g.set_layout_options('redraw',true,'redraw_gap',0.005,'legend_width',0.09);
+figure('units','normalized','outerposition',[0 0 1 1],'color','w')
+g.draw();
+g.export('file_name','PsychHist_PrevOutcomeRightChoice','export_path','../figures/behavioural/','file_type','pdf');
+
 %% Plot RT medians across contrasts per session
 g = gramm('x',D.cDiff,'y',D.RT,'color',D.choice,'subset',D.feedback=='Rewarded');
 g.facet_grid(D.mouseName,D.sessionNum,'scale','free_y');
@@ -1172,8 +1187,8 @@ lose = zeros(size(D.choice));
 lose(D.feedback=='Unrewarded' & D.choice=='Right choice') = +1;
 lose(D.feedback=='Unrewarded' & D.choice=='Left choice') = -1;
 
-d.prevWin = circshift(win,1); % -1=L, +1=R previous trial rewarded
-d.prevLose = circshift(lose,1); % -1=L, +1=R previous trial rewarded
+d.prevWin = circshift(win,-1); % -1=L, +1=R previous trial rewarded
+d.prevLose = circshift(lose,-1); % -1=L, +1=R previous trial rewarded
 
 %Remove first trials
 d = structfun(@(f) f( D.trialNumber>1, :) , d,  'UniformOutput', 0);
