@@ -1,4 +1,59 @@
-%% Extract and process raw data
+%% Extract and downsample raw photometry dataset
+d = loadProjectDataset('GCaMP_LearningGrating2AFC');
+
+%Iterate through each session
+for sess = 1:height(d.sessionInfo)
+    
+    eRef = d.sessionInfo.expRef{sess};
+    fprintf('%d/%d %s\n',sess,height(d.sessionInfo),eRef);
+    
+    %Get path of the new photometry file
+    newFile = dat.expFilePath(eRef, 'photometry','master');
+    
+    %Load photometry data .mat file
+    e=strsplit(eRef,'_');
+    thisDate = e{1};
+    thisSess = e{2};
+    thisSubj = e{3};
+    filepath = sprintf("\\\\QNAP-AL001.dpag.ox.ac.uk\\Data\\%s\\%s\\photoM\\%s_%s_%s_F.mat",thisSubj,thisDate,thisSubj,thisDate,thisSess);
+    load(filepath);
+    TimeStamps=photoMdata.Time_s_;
+    Water = photoMdata.TTL_1; % water TTL signal
+
+    %Signals contain 'dF_F0' in name
+    numFrames = length(photoMdata.AnalogIn_2_dF_F0);
+    A = zeros(numFrames, 9);
+    A(:,3) = photoMdata.AnalogIn_2_dF_F0;
+    try
+        A(:,7) = photoMdata.AnalogIn_4_dF_F0; %add 4th channel if exists
+    catch
+    end
+    A(:,end) = cumsum(Water);%add water TTL signal (accumulated)
+    
+    %Resample to 100Hz
+    fs = 100;
+    new_timestamps = (TimeStamps(1):(1/fs):TimeStamps(end))';
+    new_A = interp1(TimeStamps,A,new_timestamps);
+    
+    %Concatenate to matrix where 1st column is timestamps, last column is
+    %accumulated reward echo, and middle columns are the signal
+    X = [new_timestamps*1000, new_A];
+    
+    %write file
+    writematrix(X, newFile);
+    
+    %Try running alignment code and plotting
+    try
+        b = getBehavData(eRef, d.sessionInfo.dataProfile{sess});
+        [F,t]=photometryAlign(eRef,false);
+        outcomeTime = nanmean([b.rewardTime, b.punishSoundOnsetTime],2);
+        easy.EventAlignedAverage(F(:,3),t, {'stim',b.stimulusOnsetTime;'outcome',outcomeTime},'splitBy',{'c',b.contrastRight-b.contrastLeft;'outcome',b.feedback} ,'baselineSubtract',[-0.3 0],'titleText',eRef);
+        drawnow;
+    catch 
+        warning('Problem with dataProfile for %s',eRef);
+    end
+end
+%% Extract data and concatenate for all sessions/mice
 clear all; close all;
 p = loadProjectDataset('GCaMP_LearningGrating2AFC');
 numSess = height(p.sessionInfo);
@@ -7,8 +62,7 @@ numSess = height(p.sessionInfo);
 regions = {'Left VTA','Right VTA','Left DMS','Right DMS','Left NAc','Right NAc'};
 
 %Get data from each mouse
-t_sample_epoch = linspace(-0.5,0.8,100);
-t_sample_wholetrial = linspace(-0.2,4,400);
+t_sample_epoch = linspace(-0.5,1,100);
 warp_sizes = [50,100,20,100]; %number of elements for each epoch: pre-stim, stim-choice, choice-outcome, post-outcome
 D = table;
 for sess = 1:numSess
@@ -16,53 +70,36 @@ for sess = 1:numSess
     
     %Load behav data
     b = getBehavData(p.sessionInfo.expRef{sess},p.sessionInfo.dataProfile{sess});
-    
-    %Get photometry data
-    [F,t]=photometryAlign(p.sessionInfo.expRef{sess}, b.rewardTime(~isnan(b.rewardTime)));
-%     
-%     %Load photometry data
-%     e=strsplit(p.sessionInfo.expRef{sess},'_');
-%     thisDate = e{1};
-%     thisSess = e{2};
-%     thisSubj = e{3};
-%     filepath = sprintf("\\\\QNAP-AL001.dpag.ox.ac.uk\\Data\\%s\\%s\\photoM\\%s_%s_%s_F.mat",thisSubj,thisDate,thisSubj,thisDate,thisSess);
-%     load(filepath);
-%     Water = photoMdata.TTL_1; % water TTL signal
-%     TimeStamps=photoMdata.Time_s_;
-%     
-%     % Align dF/F times to block times
-%     [~,reward_echo_photoM] = risetime(Water,TimeStamps);
-%     switch(p.sessionInfo.dataProfile{sess})
-%         case 'Grating2AFC_choiceWorld'
-%             reward_echo_behav = b.rewardTime(~isnan(b.rewardTime));
-%             stimTime = b.stimulusOnsetTime;
-%         case 'Grating2AFC_choiceWorld_noTimeline'
-%             reward_echo_behav = b.rewardTimeEstimate(~isnan(b.rewardTimeEstimate));
-%             stimTime = b.stimulusOnsetTimeEstimate;
-%             outcomeTime = nanmean([b.rewardTimeEstimate, b.punishSoundOnsetTimeEstimate],2);
-%     end
-%     
-%     [~,photoM2block] = makeCorrection(reward_echo_behav, reward_echo_photoM, false); % find the correction factor
-%     deltaFoverF= photoMdata.AnalogIn_2_dF_F0;
-%     traceTime = applyCorrection(TimeStamps, photoM2block);  % photoM data is on the Timeline now
-%     
-%     b.stimTime = stimTime;
     b.outcomeTime = nanmean([b.rewardTime, b.punishSoundOnsetTime],2);
-    
+
+    %Get photometry data
+    error('Need to update photometryAlign call');
+    [F,t]=photometryAlign(p.sessionInfo.expRef{sess},false);
+    F = F(:,1:2:end);%get green channel only
+
     b.dff_stim = nan(length(b.choice),length(t_sample_epoch),length(regions));
     b.dff_choice = nan(length(b.choice),length(t_sample_epoch),length(regions));
     b.dff_outcome = nan(length(b.choice),length(t_sample_epoch),length(regions));
     b.dff_timewarped = nan(length(b.choice),sum(warp_sizes),length(regions));
-    b.dff_wholetrial = nan(length(b.choice),length(t_sample_wholetrial),length(regions));
+    
+    %define timewarped timepoints
+    warp_samples = nan(length(b.choice), sum(warp_sizes));
+    for tr = 1:length(b.choice)
+        epoch1 = linspace(b.stimulusOnsetTime(tr)-0.5, b.stimulusOnsetTime(tr), warp_sizes(1));
+        epoch2 = linspace(b.stimulusOnsetTime(tr), b.choiceStartTime(tr), warp_sizes(2));
+        epoch3 = linspace(b.choiceStartTime(tr), b.outcomeTime(tr), warp_sizes(3));
+        epoch4 = linspace(b.outcomeTime(tr), b.outcomeTime(tr)+1, warp_sizes(4));
+        warp_samples(tr,:) = [epoch1, epoch2, epoch3, epoch4];
+    end
     
     %for each possible area
     for a = 1:length(regions)
         
         %check whether this area is measured for any of the channels
         if strcmp(p.sessionInfo.photometryChannel2{sess}, regions{a})
-            dff = zscore(F(:,1));
+            dff = zscore(F(:,2));
         elseif strcmp(p.sessionInfo.photometryChannel4{sess}, regions{a})
-        	dff = zscore(F(:,2));
+        	dff = zscore(F(:,4));
         else
             dff = nan(size(t));
         end
@@ -70,66 +107,77 @@ for sess = 1:numSess
         b.dff_stim(:,:,a) = interp1(t,dff,b.stimulusOnsetTime + t_sample_epoch);
         b.dff_choice(:,:,a) = interp1(t,dff,b.choiceStartTime + t_sample_epoch);
         b.dff_outcome(:,:,a) = interp1(t,dff,b.outcomeTime + t_sample_epoch);
-        b.dff_wholetrial(:,:,a) = interp1(t,dff, b.stimulusOnsetTime + t_sample_wholetrial );
-
-        %get time-warped activity for each trial
-        warp_samples = nan(length(b.choice), sum(warp_sizes));
-        for tr = 1:length(b.choice)
-            epoch1 = linspace(b.stimulusOnsetTime(tr)-0.5, b.stimulusOnsetTime(tr), warp_sizes(1));
-            epoch2 = linspace(b.stimulusOnsetTime(tr), b.choiceStartTime(tr), warp_sizes(2));
-            epoch3 = linspace(b.choiceStartTime(tr), b.outcomeTime(tr), warp_sizes(3));
-            epoch4 = linspace(b.outcomeTime(tr), b.outcomeTime(tr)+1, warp_sizes(4));
-            warp_samples(tr,:) = [epoch1, epoch2, epoch3, epoch4];
-        end
-        
         b.dff_timewarped(:,:,a) = interp1(t,dff,warp_samples);
     end
     
+    %add eye data if exists and can be aligned
+    b.pupil_majorPos_stim = nan(length(b.choice),length(t_sample_epoch));
+    b.pupil_minorPos_stim = nan(length(b.choice),length(t_sample_epoch));
+    eye_path = sprintf('..\\data\\eye_preproc\\%s_eye_proc.mat',p.sessionInfo.expRef{sess});
+    if exist(eye_path,'file')
+        f = load(eye_path);
+        pos = f.pupil{1}.com_smooth;
+        [~,scores] = pca(pos); %do PCA to convert to major/minor axes
+        scores = zscore(scores);
+
+        eye_t = getEventTimes(p.sessionInfo.expRef{sess},'eyeCameraStrobe');
+        if length(eye_t) == size(pos,1)
+            fprintf('\t eye data included\n');
+            b.pupil_majorPos_stim = interp1(eye_t,scores(:,1),b.stimulusOnsetTime + t_sample_epoch);
+            b.pupil_minorPos_stim = interp1(eye_t,scores(:,2),b.stimulusOnsetTime + t_sample_epoch);
+            b.pupil_majorPos_stim = b.pupil_majorPos_stim - mean(b.pupil_majorPos_stim(:,t_sample_epoch<0),2);
+            b.pupil_minorPos_stim = b.pupil_minorPos_stim - mean(b.pupil_minorPos_stim(:,t_sample_epoch<0),2);
+        end
+    end
+
     %baseline subtract
     pre_stim_baseline = mean(b.dff_stim(:,t_sample_epoch<0,:),2);
     b.dff_stim = b.dff_stim - pre_stim_baseline;
     b.dff_outcome = b.dff_outcome - pre_stim_baseline;
     b.dff_outcome = b.dff_outcome - pre_stim_baseline;
-    b.dff_wholetrial = b.dff_wholetrial - pre_stim_baseline;
     b.dff_timewarped = b.dff_timewarped - mean(b.dff_timewarped(:,1:warp_sizes(1),:),2);
-%  
-    %calculate RT
-    b.RT = b.choiceStartTime - b.stimulusOnsetTime;
+    
     b.expRef = repmat(p.sessionInfo.expRef(sess), length(b.choice), 1);
-    
-    %add wheel position data
-    block = dat.loadBlock(p.sessionInfo.expRef{sess});
-    b.wheel_stim =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.stimulusOnsetTime + t_sample_epoch);
-    b.wheel_choice =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.choiceStartTime + t_sample_epoch);
-    pre_stim_baseline = mean(b.wheel_stim(:,t_sample_epoch<0),2);
-    b.wheel_stim = b.wheel_stim - pre_stim_baseline; %pre-stim baseline
-    b.wheel_choice = b.wheel_choice - pre_stim_baseline; %pre-stim baseline
-
-    %remove trials where the DA signal wasn't measured
-    badIdx = isnan(nanmean(b.dff_stim(:,1,:),3)) | isnan(nanmean(b.dff_outcome(:,1,:),3));
-    b(badIdx,:)=[];
-    b.trialNumber = (1:length(b.choice))';
-    
+% % %     %add wheel position data
+% % %     block = dat.loadBlock(p.sessionInfo.expRef{sess});
+% % %     b.wheel_stim =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.stimulusOnsetTime + t_sample_epoch);
+% % %     b.wheel_choice =  block.inputSensorGain*interp1(block.inputSensorPositionTimes,block.inputSensorPositions,b.choiceStartTime + t_sample_epoch);
+% % %     pre_stim_baseline = mean(b.wheel_stim(:,t_sample_epoch<0),2);
+% % %     b.wheel_stim = b.wheel_stim - pre_stim_baseline; %pre-stim baseline
+% % %     b.wheel_choice = b.wheel_choice - pre_stim_baseline; %pre-stim baseline
+% % 
+% % %     %remove trials where the DA signal wasn't measured
+% % %     badIdx = isnan(nanmean(b.dff_stim(:,1,:),3)) | isnan(nanmean(b.dff_outcome(:,1,:),3));
+% % %     b(badIdx,:)=[];
+% % %     
     %add to big table
-    D = vertcat(D, b(:,{'expRef','trialNumber','contrastLeft','contrastRight',...
-                        'choice','stimulusOnsetTime','choiceStartTime','outcomeTime',...
-                        'RT','feedback','rewardVolume',...
-                        'dff_stim','dff_choice','dff_outcome','dff_timewarped','dff_wholetrial',...
-                        'wheel_stim','wheel_choice'}) );
+    D = vertcat(D, b(:,{'expRef','trialNumber','repeatNumber','rewardContingency','onsetToneTime',...
+                        'contrastLeft','contrastRight','stimulusOnsetTime','choice','choiceCompleteTime','choiceStartTime',...
+                        'feedback','rewardVolume','rewardTime','punishSoundOnsetTime','outcomeTime',...
+                        'dff_stim','dff_choice','dff_outcome','dff_timewarped',...
+                        'pupil_majorPos_stim','pupil_minorPos_stim'}));
 end
+D = sortrows(D,{'expRef','trialNumber'});
 
-save('../data/compiled.mat','p','D','t_sample_epoch','t_sample_wholetrial','regions','warp_sizes','-v7.3');
+%reorder columns
+save('../data/GCaMP_LearningGrating2AFC_trialInfo.mat','p','D','t_sample_epoch','regions','warp_sizes','-v7.3');
 %% **: Load data and compute binned DA values
 clear all; close all;
-load('../data/compiled.mat');
-numSess = height(p.sessionInfo);
+load('../data/GCaMP_LearningGrating2AFC_trialInfo.mat');
+D = innerjoin(D, p.sessionInfo);
+
+%Get only phase
+% D = D(strcmp(D.task,'asymmetricReward'),:);
 
 stimWindow = [0.4 0.6];
 % stimWindow = [0.3 0.4];
 outcomeWindow = [0.35 0.4];
 
 %Remove trials with very large RTs, so warping isn't so extreme.
-D = D(D.RT<5,:);
+D.RT = D.choiceStartTime-D.stimulusOnsetTime;
+goodIdx = D.RT<5 & D.repeatNumber==1;
+D = D(goodIdx,:);
+fprintf('Keeping RT<5 and repNum==1 trials = %0.2f%% of trials\n', 100*mean(goodIdx));
 
 %Extract activity over windows
 D.dff_stim_binned = mean(D.dff_stim(:, stimWindow(1) <= t_sample_epoch & t_sample_epoch <= stimWindow(2),:),2);
@@ -140,32 +188,6 @@ D.dff_stim_binned(D.RT < stimWindow(2),:,:)=NaN; %set binned value to NaN if it 
 D.cDiff = D.contrastRight - D.contrastLeft;
 num_stim_cond = length(unique(D.cDiff));
 
-%add mouse information
-D = innerjoin(D,p.sessionInfo);
-
-%re-sort by mouse, session and trial number
-D = sortrows(D,{'mouseName','sessionNum','trialNumber'});
-
-%Compute zscored RT and psychometric weights
-D.RTz = nan(size(D.RT));
-p.sessionInfo.psych_B = nan(height(p.sessionInfo),1);
-p.sessionInfo.psych_SL = nan(height(p.sessionInfo),1);
-p.sessionInfo.psych_SR = nan(height(p.sessionInfo),1);
-
-%Per session quantities
-for sess = 1:numSess
-    %zscore RT
-    idx = strcmp(D.expRef,p.sessionInfo.expRef{sess});
-    D.RTz(idx) = (D.RT(idx) - median(D.RT(idx)))/(1.486 * mad(D.RT(idx),1)); %modified z score
-    
-    %Compute psychometric weights for each session
-    b = glmfit([D.contrastLeft(idx) D.contrastRight(idx)],D.choice(idx)=='Right choice', 'binomial','Constant','on');
-    p.sessionInfo.psych_B(sess) = b(1);
-    p.sessionInfo.psych_SL(sess) = b(2);
-    p.sessionInfo.psych_SR(sess) = b(3);
-end
-
-%get the VTA activity (makes things easier later)
 D.VTA_binned = nanmean( D.dff_stim_binned(:,:,contains(regions,'VTA')), 3);
 %% Plot psychometric curves per session
 g = gramm('x',D.cDiff,'y',double(D.choice=='Right choice'),'lightness',D.mouseName);
@@ -249,7 +271,6 @@ g.set_layout_options('redraw',true,'redraw_gap',0.005,'legend_width',0.09);
 figure('units','normalized','outerposition',[0 0 1 1],'color','w')
 g.draw();
 g.export('file_name','PsychHist_PrevOutcomeRightChoice','export_path','../figures/behavioural/','file_type','pdf');
-
 %% Plot RT medians across contrasts per session
 g = gramm('x',D.cDiff,'y',D.RT,'color',D.choice,'subset',D.feedback=='Rewarded');
 g.facet_grid(D.mouseName,D.sessionNum,'scale','free_y');
@@ -295,17 +316,67 @@ for a = 1:length(regions)
     g.draw();
 
     %match Y axes in columns and set limit to range of values
-    numSess = groupsummary(E.sessionNum,{E.mouseName},'max');
-    for c = 1:size(g.facet_axes_handles,2)
-        ylim = [median(cellfun(@min,get(g.facet_axes_handles(1:numSess(c),c),'ylim'))),...
-            median(cellfun(@max,get(g.facet_axes_handles(1:numSess(c),c),'ylim')))];
-        
-        set(g.facet_axes_handles(:,c),'ylim',ylim);
+    %     %Match Y lim for each mouse
+    numMice = size(g.facet_axes_handles,2);
+    for m = 1:numMice
+        ylims =cat(1,g.facet_axes_handles(:,m).YLim);
+        ylims = ylims(ylims(:,1)>-10,:);
+        set(g.facet_axes_handles(:,m),'ylim', median(ylims));
     end
-    
-%     g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence_timewarped/','file_type','pdf');
+
+    g.export('file_name',sprintf('%s',strrep(regions{a},' ','')),'export_path','../figures/fluorescence_timewarped/','file_type','pdf');
     
 end
+%% Plot L/R DMS side by side for one mouse
+mouseName = 'ALK074'; %looks better
+% mouseName = 'ALK083'; 
+idx = strcmp(D.task,'asymmetricReward') & strcmp(D.mouseName,mouseName) & D.feedback=='Rewarded';
+
+%Left DMS
+g(1,1) = gramm('x',1:sum(warp_sizes),'y',D.dff_timewarped(:,:,strcmp(regions,'Left DMS')),'color',D.cDiff,'subset',idx);
+g(1,1).facet_grid(D.sessionNum,[],'scale','free_y');
+g(1,1).stat_summary('setylim','true');
+g(1,1).set_color_options('map',0.9*RedWhiteBlue(floor(num_stim_cond/2)));
+g(1,1).geom_vline('xintercept',cumsum(warp_sizes(1:3)),'style','k:');
+g(1,1).set_title({'Left DMS rewarded trials'});
+g(1,1).set_names('x','','y','zDFF','color','contrast','column','','row','');
+g(1,1).axe_property('xtick','','xcolor','none');
+
+
+g(1,2) = gramm('x',t_sample_epoch,'y',D.dff_stim(:,:,strcmp(regions,'Left DMS')),'color',D.cDiff,'subset',idx);
+g(1,2).facet_grid(D.sessionNum,[],'scale','free_y');
+g(1,2).stat_summary('setylim','true');
+g(1,2).set_color_options('map',0.9*RedWhiteBlue(floor(num_stim_cond/2)));
+g(1,2).geom_vline('xintercept',0,'style','k:');
+g(1,2).set_title({'Left DMS rewarded trials: STIM ONSET'});
+g(1,2).set_names('x','','y','zDFF','color','contrast','column','','row','');
+g(1,2).axe_property('xlim',[-0.2 0.8]);
+
+g(1,3) = gramm('x',1:sum(warp_sizes),'y',D.dff_timewarped(:,:,strcmp(regions,'Right DMS')),'color',D.cDiff,'subset',idx);
+g(1,3).facet_grid(D.sessionNum,[],'scale','free_y');
+g(1,3).stat_summary('setylim','true');
+g(1,3).set_color_options('map',0.9*RedWhiteBlue(floor(length(unique(D.cDiff))/2)));
+g(1,3).geom_vline('xintercept',cumsum(warp_sizes(1:3)),'style','k:');
+g(1,3).set_title('Right DMS rewarded trials');
+g(1,3).set_names('x','','y','zDFF','color','contrast','column','','row','');
+g(1,3).axe_property('xtick','','xcolor','none');
+
+g(1,4) = gramm('x',t_sample_epoch,'y',D.dff_stim(:,:,strcmp(regions,'Right DMS')),'color',D.cDiff,'subset',idx);
+g(1,4).facet_grid(D.sessionNum,[],'scale','free_y');
+g(1,4).stat_summary('setylim','true');
+g(1,4).set_color_options('map',0.9*RedWhiteBlue(floor(num_stim_cond/2)));
+g(1,4).geom_vline('xintercept',0,'style','k:');
+g(1,4).set_title('Right DMS rewarded trials: STIM ONSET');
+g(1,4).set_names('x','','y','zDFF','color','contrast','column','','row','');
+g(1,4).axe_property('xlim',[-0.2 0.8]);
+
+
+g.set_layout_options('redraw',true,'redraw_gap',0);
+g.set_title(mouseName);
+
+figure('outerposition',[249 73 1315 894],'color','w');
+g.draw();
+g.export('file_name',sprintf('DMS_%s',mouseName),'export_path','../figures/fluorescence_timewarped/','file_type','pdf');
 %% Plot DA traces and tuning curves
 
 %For each region separately
@@ -435,7 +506,6 @@ for m = 1:max(miceID)
     g.export('file_name',mice{m},'export_path','../figures/','file_type','png');
 
 end
-
 %% Plot DA decoding
 
 for a = 1:length(regions)
@@ -822,7 +892,6 @@ figure; g.draw();
 g.update('color',[]);
 g.stat_glm('disp_fit',true);
 g.draw();
-
 %% Plot timewarped DA traces in DMS, focusing on sessions with and without behavioural history effects
 % 
 % %Mouse name, sessWithHist, sessWithoutHist effects
@@ -987,8 +1056,6 @@ g.update();
 g.set_color_options('chroma',0,'lightness',30);
 g.stat_summary('setylim',true);
 g.draw();
-
-
 %% Create plots for presentation
 
 %Plot simulations with different levels of sensitivity
@@ -1096,6 +1163,24 @@ plot( g(1,2).facet_axes_handles, groupsummary(perf,perflabel{1},'median'), 'k-',
 plot( g(2,2).facet_axes_handles, groupsummary(rt,rtlabel{1},'median'), 'k-','linewidth',4);
 
 
+%plot overall choice imbalance ( abs(L-R)/L+R )
+[numR,numRlabel] = groupsummary(D.choice=='Right choice',{D.sessionNum D.mouseName},'sum');
+[numL] = groupsummary(D.choice=='Left choice',{D.sessionNum D.mouseName},'sum');
+B = abs(numR-numL)./(numR+numL);
+
+clear g;
+g = gramm('x',numRlabel{1},'y',B,'group',numRlabel{2});
+g.geom_point();
+g.geom_line();
+% g.stat_summary('geom',{'line','point'});
+g.geom_hline('yintercept',0,'style','k:');
+g.set_names('x','Days','y','Bias abs(L-R)/L+R','column','','row','');
+g.axe_property('ylim',[0 1]);
+figure; g.draw();
+
+plot( g.facet_axes_handles, groupsummary(B,numRlabel{1},'mean'), 'k-','linewidth',4);
+
+
 
 % Psych SL and SR
 g(1,1) = gramm('x',p.sessionInfo.sessionNum,'y',-p.sessionInfo.psych_SL,'lightness',p.sessionInfo.mouseName); 
@@ -1167,7 +1252,6 @@ g.stat_glm('disp_fit',false);
 g.set_names('x','ABS(Contrast)','y','dF/F (z-score) post-stim','row','','column','','color','Stimulus side');
 g.set_layout_options('redraw',true,'redraw_gap',0.01);
 figure; g.draw();
-
 %% Fit history model 
 
 d = struct;
@@ -1196,4 +1280,185 @@ d = structfun(@(f) f( D.trialNumber>1, :) , d,  'UniformOutput', 0);
 %fit
 fit = stan_fitModel('Hierarchical_Logistic_OutcomeHistory',d,'\\QNAP-AL001.dpag.ox.ac.uk\PZatka-Haas\GCaMPLearning\data\fit_model.mat');
 % fit = load("\\QNAP-AL001.dpag.ox.ac.uk\PZatka-Haas\GCaMPLearning\data\fit_model.mat");
+%% Plot performance over sessions for ALK074
+g = gramm('x',D.sessionNum,'y',D.feedback=='Rewarded','subset',abs(D.cDiff)>=0.5 & strcmp(D.mouseName,'ALK074'));
+g.stat_summary('geom',{'point','line'});
+g.geom_hline('yintercept',[0.5 1],'style','k:');
+figure; g.draw();
+%% Plot pupil location
 
+%get sessions with eye data
+E = D( ~isnan(D.pupil_majorPos_stim(:,1)), :);
+%per session plot
+this_num_stim_cord = length(unique(E.cDiff));
+g = gramm('x',t_sample_epoch,'y',E.pupil_majorPos_stim,'color',E.cDiff);
+g.facet_wrap(E.expRef,'scale','independent');
+g.stat_summary('type','ci','setylim',true);
+g.set_names('x','Time from stimulus onset (sec)','y','Eye PC1 (mean & 95% CI)','column','');
+g.set_color_options('map',0.9*RedWhiteBlue(floor(this_num_stim_cord/2)));
+g.geom_vline('xintercept',0);
+g.set_layout_options('redraw',true,'redraw_gap',0.01);
+figure; g.draw();
+g.export('file_name','EyePos_MajorAxis_perSession','export_path','../figures/behavioural/','file_type','pdf');
+
+%per mouse plot (combining data across sessions)
+g = gramm('x',t_sample_epoch,'y',E.pupil_majorPos_stim,'color',E.cDiff);
+g.facet_grid([],E.mouseName,'scale','independent');
+g.stat_summary('type','ci','setylim',true);
+g.set_names('x','Time from stimulus onset (sec)','y','Eye PC1 (mean & 95% CI)','column','');
+g.set_color_options('map',0.9*RedWhiteBlue(floor(this_num_stim_cord/2)));
+g.geom_vline('xintercept',0);
+g.set_layout_options('redraw',true,'redraw_gap',0.01);
+figure('position',[156 720 1125 220]); g.draw();
+g.export('file_name','EyePos_MajorAxis_perMouse','export_path','../figures/behavioural/','file_type','pdf');
+
+% for each session, Regress pupil pos on contrast, and DA activity
+time_bin = [0.4 0.8];
+% time_bin = [0.2 0.5];
+E.binned_eye_major = mean(E.pupil_majorPos_stim(:, time_bin(1) <= t_sample_epoch & t_sample_epoch <= time_bin(2)),2);
+E.binned_activity = squeeze(mean( E.dff_stim(:,time_bin(1) <= t_sample_epoch & t_sample_epoch <= time_bin(2),:), 2));
+
+sessList = unique(E.expRef);
+
+expRefAreaLabel = {};
+params = {};
+X = {};
+Y = {};
+for sess = 1:length(sessList)
+    
+    idx = strcmp(E.expRef, sessList{sess});
+    for a = 1:length(regions)
+        activity = mean( E.dff_stim(idx,time_bin(1) <= t_sample_epoch & t_sample_epoch <= time_bin(2),a), 2);
+        if ~all(isnan(activity))
+            
+            if contains(regions{a},'Left')
+                Cipsi = E.contrastLeft(idx);
+                Ccontra = E.contrastRight(idx);
+            elseif contains(regions{a},'Right')
+                Cipsi = E.contrastRight(idx);
+                Ccontra = E.contrastLeft(idx);
+            end
+
+            %regress
+            x = [Ccontra, Cipsi, E.binned_eye_major(idx)];
+            y = activity;
+            LM = fitlm(x,y,'VarNames',{'Ccontra','Cipsi','Eye','DA activity'});
+            params = [params; {LM.Coefficients.Estimate}];
+            expRefAreaLabel = [expRefAreaLabel; {[sessList{sess} ' ' regions{a}]}];
+            X = [X; x];
+            Y = [Y; y];
+%             expRefAreaLabel = [expRefAreaLabel; repmat({[sessList{sess} ' ' regions{a}]} ,length(LM.Residuals.Raw), 1)];
+        end
+    end
+end
+params = cell2mat(cellfun(@(c) c', params, 'UniformOutput', false));
+paramsLab = repmat({'b0','1:Contra','2:Ipsi','3:EyePos'}, size(params,1), 1);
+areaLab = cellfun(@(c) c(21:end), expRefAreaLabel, 'UniformOutput', false);
+areaLab = repmat(areaLab,1,4);
+
+%iterate through each session+region combination and make figure for paper
+for i = 1:length(expRefAreaLabel)
+    x = strsplit(expRefAreaLabel{i},' ');
+    vidFile = VideoReader(strrep(dat.expFilePath(x{1},'eye-video','remote'),'.mp4','.mj2'));
+    
+    eye_path = sprintf('..\\data\\eye_preproc\\%s_eye_proc.mat',x{1});
+    f = load(eye_path);
+    pos = f.pupil{1}.com_smooth + double([f.rois{1}.xrange(1) f.rois{1}.yrange(1)]);
+    [coef,score] = pca(pos);
+    pos_mean = mean(pos);
+    
+    f1=figure('name',[x{1} ', ' x{2} ' ' x{3}],'position',[577 245 893 689]);
+    subplot(3,3,1); imagesc(vidFile.readFrame); hold on; plot(pos(:,1),pos(:,2),'r.');
+    colormap(gray);
+    set(gca,'xtick','','ytick',''); title([x{1} ', ' x{2} ' ' x{3}],'interpreter','none');
+    pca_line = pos_mean + 10*coef(:,1);
+    line([pos_mean(1) - pca_line(1,1),pos_mean(1) + pca_line(2,1)],...
+        [pos_mean(2) - pca_line(1,2),pos_mean(2) + pca_line(2,2)],'linestyle','--','Color','r');
+    axis equal;
+    ax_tmp = subplot(3,3,[2 3]);
+    eye_pos = ax_tmp.Position; delete(ax_tmp);
+    ax_tmp = subplot(3,3,4);
+    colbar_pos = ax_tmp.Position; delete(ax_tmp);
+    ax_tmp = subplot(3,3,[5 6]);
+    gcamp_pos = ax_tmp.Position; delete(ax_tmp);
+    ax_tmp = subplot(3,3,7);
+    scatter1_pos = ax_tmp.Position; delete(ax_tmp);
+    ax_tmp = subplot(3,3,8);
+    scatter2_pos = ax_tmp.Position; delete(ax_tmp);
+    ax_tmp = subplot(3,3,9);
+    summary_pos = ax_tmp.Position; delete(ax_tmp);
+    
+    %plot eye position split by contrast
+    g = gramm('x',t_sample_epoch,'y',E.pupil_majorPos_stim,'color',E.cDiff,'subset',strcmp(E.expRef,x{1}));
+    g.stat_summary('type','ci','setylim',true);
+    g.set_names('x','Time from stimulus onset (sec)','y','Eye PC1 (zscore)','column','','color','Contrast');
+    g.set_color_options('map',0.9*RedWhiteBlue(floor(this_num_stim_cord/2)));
+    g.geom_vline('xintercept',[0, time_bin]);
+    g.set_layout_options('redraw',true,'redraw_gap',0.01);
+    g.axe_property('xlim',[-0.2 0.8]);
+    f2=figure; g.draw();
+    ax_eye = copyobj(g.facet_axes_handles, f1);
+    ax_eye.Position = eye_pos;
+    
+    ax_col = copyobj(g.legend_axe_handle, f1);
+    ax_col.Position = colbar_pos;
+    close(f2);
+    
+    %plot gcamp split by contrast.
+    g = gramm('x',t_sample_epoch,'y',E.dff_stim(:,:,strcmp(regions, [x{2} ' ' x{3}])),'color',E.cDiff,'subset',strcmp(E.expRef,x{1}));
+    g.stat_summary('type','ci','setylim',true);
+    g.set_names('x','Time from stimulus onset (sec)','y','F (zscore)','column','');
+    g.set_color_options('map',0.9*RedWhiteBlue(floor(this_num_stim_cord/2)));
+    g.geom_vline('xintercept',[0, time_bin]);
+      g.axe_property('xlim',[-0.2 0.8]);
+    g.set_layout_options('redraw',true,'redraw_gap',0.01);
+    f2=figure; g.draw();
+    ax_gcamp = copyobj(g.facet_axes_handles, f1);
+    close(f2);
+    ax_gcamp.Position = gcamp_pos;
+    
+    %scatter eye and DA in bin
+    g = gramm('x',X{i}(:,3),'y',Y{i});
+    g.geom_point();
+    g.stat_glm('disp_fit', true);
+    g.set_names('x','Binned Eye PC1','y','binned F');
+    g.set_layout_options('redraw',true,'redraw_gap',0.01);
+    f2=figure; g.draw();
+    ax_scat1 = copyobj(g.facet_axes_handles, f1);
+    close(f2);
+    ax_scat1.Position = scatter1_pos;
+    
+    %scatter eye and residual DA
+    resid = Y{i} - (params(i,1) + X{i}(:,1:2)*params(i,2:3)'); %Y with CL and CR regressed out
+    g = gramm('x',X{i}(:,3),'y',resid);
+    g.geom_point();
+    g.stat_glm('disp_fit', true);
+    g.set_names('x','Binned Eye PC1','y','Residual: DA - (b0 + contra + ipsi)');
+    g.set_layout_options('redraw',true,'redraw_gap',0.01);
+    f2=figure; g.draw();
+    ax_scat2 = copyobj(g.facet_axes_handles, f1);
+    close(f2);
+    ax_scat2.Position = scatter2_pos;
+    
+    linkaxes([ax_scat1 ax_scat2],'xy');
+    
+    % bar plot summary of slopes
+    pL = paramsLab(:,2:end);
+    p = params(:,2:end);
+    aL = areaLab(:,2:end);    
+    g = gramm('x',pL(:),'y',p(:),'color',aL(:));
+    g.geom_hline('yintercept',0);
+    g.set_names('y',{'Coefficient (mean & 95% CI)','[red=Left DMS, blue=Right DMS]'},'color','','x','');
+    g.stat_summary('geom',{'bar','black_errorbar'},'setylim',true);
+    g.geom_jitter();
+    g.set_layout_options('redraw',true,'redraw_gap',0.01);
+    f2=figure; g.draw();
+%     leg = copyobj(get(g.legend_axe_handle,'children'), g.facet_axes_handles);
+    ax_summ = copyobj(g.facet_axes_handles, f1);
+    close(f2);
+    ax_summ.Position = summary_pos;
+    
+   	fig2Pdf(f1, sprintf('../figures/eye_perSess/%s.pdf', [x{1} ', ' x{2} ' ' x{3}]));
+    
+    close(f1);
+end
